@@ -13,10 +13,14 @@ export interface GridOrder {
 
 
 export interface BotConfig {
-  r: number; // Grid ratio (e.g., 0.95 for 5% downward intervals)
+  priceDown: number;
+  priceUp: number;
+  P0: number;
   B: number; // Initial capital in USD (e.g., 100000 for 1 BTC at P0)
   L: number; // Leverage (e.g., 50)
-  numLevels: number; // grid levels per side (LONG/SHORT)
+  numGrids: number; // Number of active grids/orders (e.g., 50)
+  // numDown: number; // Approx downward levels for span (e.g., 25 for symmetry)
+  // numUp: number; // Approx upward levels for span (e.g., 25)
 }
 
 
@@ -35,4 +39,33 @@ export interface PlacePerpOrderWithRetryParams {
   confirmationTimeout?: number;
   txParams?: TxParams;
   subAccountId?: number;
+}
+
+
+export interface LongPosition {
+  orderId: number;
+  price: number;
+  size: number;
+  isInitial: boolean;
+}
+
+
+export interface TakeProfitPosition {
+  orderId: number;
+  price: number;
+  size: number;
+}
+
+
+export interface TradePair {
+  longPosition?: LongPosition,
+  takeProfitPosition?: TakeProfitPosition,
+}
+
+
+export interface GridLevel {
+  price: number; // Grid price level
+  longOrderId?: number; // Order ID of LONG at this grid (if any)
+  tpOrderId?: number; // Order ID of take profit SHORT at next grid
+  status: 'idle' | 'long_open' | 'tp_open' | 'paired';
 }

@@ -1,26 +1,20 @@
 import {
   BN,
-  convertToNumber,
   DriftClient,
   MarketType,
   Order,
-  OrderTriggerCondition,
   OrderType,
   PositionDirection,
   QUOTE_PRECISION,
-  User,
-  UserAccount,
 } from "@drift-labs/sdk";
 import { OrderBookEvent } from "./events/types";
 import { OrderBookEmitter } from "./events/subscriber";
 import { confirmTransaction, placePerpOrderWithRetry } from "./utils";
-import { BotConfig } from "./types";
+import { BotConfig, GridLevel } from "./types";
 
 
 class DualGridBot {
   private driftClient: DriftClient;
-  private user: User;
-  private userAccount: UserAccount;
   private userAccountPublicKey: string;
 
   private emitter: OrderBookEmitter;
@@ -28,11 +22,17 @@ class DualGridBot {
   private spotMarketIndex: number;
 
   private config: BotConfig;
-  private P0: number;
   private currentPrice: number;
-  private gridPrices: number[];
+  private gridSpace: number;
+  private gridPositionSize: number;
+  private downLevels: number;
+  private upLevels: number;
 
-  private orders = new Map<number, { order: Order, status: any }>();
+  private gridLevels: GridLevel[] = [];
+
+  private orderIdToGridIndex = new Map<number, number>();
+  private orderIdToType = new Map<number, 'initial-long' | 'grid-long' | 'take-profit'>();
+
 
   constructor(
     driftClient: DriftClient,
@@ -43,8 +43,6 @@ class DualGridBot {
     config: BotConfig,
   ) {
     this.driftClient = driftClient;
-    this.user = this.driftClient.getUser();
-    this.userAccount = this.user.getUserAccount();
     this.userAccountPublicKey = userAccountPublicKey;
 
     this.userAccountPublicKey = userAccountPublicKey;
@@ -52,11 +50,19 @@ class DualGridBot {
     this.perpMarketIndex = perpMarketIndex;
     this.spotMarketIndex = spotMarketIndex;
     this.config = config;
-    this.P0 = this.driftClient.getOracleDataForPerpMarket(this.perpMarketIndex).price.toNumber() / QUOTE_PRECISION;
-    this.currentPrice = this.P0;
+    this.currentPrice = this.driftClient.getOracleDataForPerpMarket(this.perpMarketIndex).price.div(QUOTE_PRECISION).toNumber();
+    this.gridSpace = (this.config.priceUp - this.config.priceDown) / this.config.numGrids;
+    this.gridPositionSize = this.config.B * this.config.L / this.config.numGrids;
 
-    this.gridPrices = this.generateGridPrices();
+    this.upLevels = (this.config.priceUp - this.config.P0) / this.gridSpace;
+    this.downLevels = (this.config.P0 - this.config.priceDown) / this.gridSpace; 
+
+    this.gridLevels = this.generateGridLevels();
+
     this.setupEventHandlers();
+
+    console.log(`currentPrice:${this.currentPrice} gridSpace:${this.gridSpace} gridPositionSize:${this.gridPositionSize}`);
+    console.log(`Generated ${this.gridLevels.length} grid levels`, this.gridLevels);
   }
 
   private setupEventHandlers() {
@@ -66,112 +72,260 @@ class DualGridBot {
   }
 
   private async handleOrderRecord(event: any) {
-    console.log("handleOrderRecord ->> order_record received.");
+    const user = event.user.toString();
+    if (user !== this.userAccountPublicKey) return;
 
-    let user: string = event.user.toString();
-    if(user!=this.userAccountPublicKey) {
+    const order: Order = event.order;
+    const orderId = order.orderId;
+    const price = order.price.toNumber() / QUOTE_PRECISION.toNumber();
+
+    console.log(`📗 OrderRecord: orderId=${orderId}, price=${price}, direction=${order.direction}`);
+
+    // ✅ Detect if this is the initial market order (price = 0 in Drift SDK)
+    if (order.orderType === OrderType.MARKET) {
+      this.orderIdToType.set(orderId, 'initial-long');
+      console.log(`↳ ✅ Mapped as initial market long`);
       return;
     }
 
-    let order: Order = event.order;
-    const orderId = order.orderId;
+    // ✅ Find the grid level this order belongs to (closest match)
+    const gridIndex = this.gridLevels.findIndex(l => Math.abs(l.price - price) < this.gridSpace / 2);
+    if (gridIndex === -1) {
+      console.warn(`⚠️ Could not map order ${orderId} to any grid level`);
+      return;
+    }
 
-    this.orders.set(orderId, { order: order, status: 'new' });
-    console.log(`handleOrderRecord ->> user: ${user} | orders: (${orderId} -> ${this.orders.get(orderId)?.status})`);
+    // ✅ Save grid mapping
+    this.orderIdToGridIndex.set(orderId, gridIndex);
+
+    // ✅ Store by direction type
+    if (order.direction === PositionDirection.LONG) {
+      this.orderIdToType.set(orderId, 'grid-long');
+      this.gridLevels[gridIndex].longOrderId = orderId;
+      console.log(`↳ ✅ Linked LONG @ ${price} to grid[${gridIndex}]`);
+    } else if (order.direction === PositionDirection.SHORT) {
+      this.orderIdToType.set(orderId, 'take-profit');
+      this.gridLevels[gridIndex].tpOrderId = orderId;
+      console.log(`↳ ✅ Linked TAKE PROFIT @ ${price} to grid[${gridIndex}]`);
+    }
   }
 
   private async handleOrderCancel(event: any) {
-    console.log("handleOrderCancel ->> order_cancel received.");
-  }
+    const orderId = event?.event?.orderId;
+    if (!orderId) return;
 
-  private async handleOrderFill() {
-    console.log("handleOrderFill ->> order_fill received.");
-  }
+    console.log(`⚠️ Order cancelled: ${orderId}`);
 
-  private generateGridPrices(): number[] {
-    const { r, numLevels, } = this.config;
-    const gridSpacing = this.P0 * r;
-    console.log(`P0: ${this.P0} | r: ${r} | numLevels: ${numLevels} | gridSpacing: ${gridSpacing}`);
+    const gridIndex = this.orderIdToGridIndex.get(orderId);
+    if (gridIndex === undefined) return;
 
-    console.log("downPrices:");
-    const downPrices: number[] = [];
-    for (let k = 1; k <= numLevels; k++) {
-      const price = this.P0 - (k * gridSpacing);
-      downPrices.push(price);
-      console.log(`Price: ${price}`);
-    }
-    console.log("upPrices:");
-    const upPrices: number[] = [];
-    for (let k = 1; k <= numLevels; k++) {
-      const price = this.P0 + (k * gridSpacing);
-      upPrices.push(price);
-      console.log(`Price: ${price}`);
+    const type = this.orderIdToType.get(orderId);
+
+    if (type === 'grid-long') {
+      console.log(`↳ Removing cancelled LONG from grid[${gridIndex}]`);
+      this.gridLevels[gridIndex].longOrderId = undefined;
+      this.gridLevels[gridIndex].status = 'idle';
     }
 
-    return [...downPrices, this.P0, ...upPrices].sort((a, b) => a - b);
+    if (type === 'take-profit') {
+      console.log(`↳ Removing cancelled TP from grid[${gridIndex}]`);
+      this.gridLevels[gridIndex].tpOrderId = undefined;
+      if (!this.gridLevels[gridIndex].longOrderId) {
+        this.gridLevels[gridIndex].status = 'idle';
+      }
+    }
+
+    // Cleanup
+    this.orderIdToGridIndex.delete(orderId);
+    this.orderIdToType.delete(orderId);
+  }
+
+  private async handleOrderFill(event: OrderBookEvent) {
+    console.log("✅ handleOrderFill triggered");
+
+    const fillEvent = event.event;
+    const orderId = fillEvent?.orderId;
+    if (!orderId) return;
+
+    const orderType = this.orderIdToType.get(orderId);
+    const gridIndex = this.orderIdToGridIndex.get(orderId);
+
+    console.log(`→ Filled orderId=${orderId}, type=${orderType}, gridIndex=${gridIndex}`);
+
+    // ✅ A: Initial market order (ignore, already has TPs)
+    if (orderType === 'initial-long') {
+      console.log("ℹ️ Initial long filled, no action needed.");
+      return;
+    }
+
+    // ✅ Case B: A GRID LONG got filled → place take profit above
+    if (orderType === 'grid-long' && gridIndex !== undefined) {
+      this.gridLevels[gridIndex].status = 'paired';
+      this.gridLevels[gridIndex].longOrderId = undefined;
+
+      const tpIndex = gridIndex + 1;
+      if (tpIndex < this.gridLevels.length) {
+        await this.placeTakeProfit(gridIndex, tpIndex);
+      } else {
+        console.log("⚠️ No higher grid for take profit.");
+      }
+      return;
+    }
+
+    // ✅ C: Take Profit filled → place a replacement grid long below
+    if (orderType === 'take-profit' && gridIndex !== undefined) {
+      this.gridLevels[gridIndex].tpOrderId = undefined;
+      this.gridLevels[gridIndex].status = 'idle';
+
+      const newLongIndex = gridIndex - 1;
+      if (newLongIndex >= 0) {
+        await this.placeGridLong(newLongIndex);
+      } else {
+        console.log("⚠️ No lower grid level to place replacement LONG.");
+      }
+      return;
+    }
+
+    console.log("📊 GRID STATE:", this.getStatus());
+  }
+
+  private async placeTakeProfit(fromIndex: number, toIndex: number) {
+    const nextLevel = this.gridLevels[toIndex];
+
+    console.log(`📈 Placing Take Profit at ${nextLevel.price}`);
+
+    const orderParams = {
+      orderType: OrderType.LIMIT,
+      marketType: MarketType.PERP,
+      marketIndex: this.perpMarketIndex,
+      direction: PositionDirection.SHORT,
+      baseAssetAmount: this.toPreciseSize(this.gridPositionSize),
+      price: this.toPrecisePrice(nextLevel.price),
+      reduceOnly: true,
+      postOnly: true,
+    };
+
+    const tx = await placePerpOrderWithRetry({ driftClient: this.driftClient, orderParams });
+    console.log(`✅ TP placed: ${tx}`);
+
+    this.gridLevels[fromIndex].status = 'tp_open';
+  }
+
+  private async placeGridLong(gridIndex: number) {
+    const level = this.gridLevels[gridIndex];
+
+    console.log(`📉 Placing replacement LONG at ${level.price}`);
+
+    const orderParams = {
+      orderType: OrderType.LIMIT,
+      marketType: MarketType.PERP,
+      marketIndex: this.perpMarketIndex,
+      direction: PositionDirection.LONG,
+      baseAssetAmount: this.toPreciseSize(this.gridPositionSize),
+      price: this.toPrecisePrice(level.price),
+      reduceOnly: false,
+      postOnly: true,
+    };
+
+    const tx = await placePerpOrderWithRetry({ driftClient: this.driftClient, orderParams });
+    console.log(`✅ Replacement LONG placed: ${tx}`);
+
+    this.gridLevels[gridIndex].status = 'long_open';
+  }
+
+  private generateGridLevels(): GridLevel[] {
+    const levels: GridLevel[] = [];
+    for (let i = 0; i < this.config.numGrids; i++) {
+      const price = this.config.priceDown + i * this.gridSpace;
+      levels.push({
+        price,
+        status: 'idle'
+      });
+    }
+    return levels;
   }
 
   public async placeInitialOrders(): Promise<void> {
     console.log("DualGridBot ->> placeInitialOrders");
 
-    let orderParamsList: any[] = [];
+    // ✅ Track orders to send in a single tx
+    const orders: any[] = [];
 
-    // Long Grid: Buy limits below current price (open long), will place sell to close above later
-    const belowPrices = this.gridPrices.filter(p => p < this.currentPrice);
-    for (const p of belowPrices) {
-      const size = this.calculatePositionSize(p);
-      console.log(`size: ${size} | p: ${p}`);
+    // ✅ 1. Place initial market long (2 BTC)
+    const initialLongSize = this.downLevels * this.gridPositionSize;
+    orders.push({
+      orderType: OrderType.MARKET,
+      marketType: MarketType.PERP,
+      marketIndex: this.perpMarketIndex,
+      direction: PositionDirection.LONG,
+      baseAssetAmount: this.toPreciseSize(initialLongSize),
+      reduceOnly: false,
+    });
 
-      const orderParams = {
-        orderType: OrderType.LIMIT,
-        marketType: MarketType.PERP,
-        marketIndex: this.perpMarketIndex,
-        direction: PositionDirection.LONG,
-        baseAssetAmount: this.driftClient.convertToPerpPrecision(size),
-        price: this.driftClient.convertToPricePrecision(p),
-        reduceOnly: false,
-      };
-      orderParamsList.push(orderParams);
-
-      console.log(`amount: ${orderParams.baseAssetAmount} | price: ${orderParams.price}`);
+    // ✅ 2. Take profit sells for initial long (10 levels above P0)
+    let tpCount = 0;
+    for (let i = 0; i < this.gridLevels.length; i++) {
+      const level = this.gridLevels[i];
+      if (level.price > this.config.P0 && tpCount < this.upLevels) {
+        orders.push({
+          orderType: OrderType.LIMIT,
+          marketType: MarketType.PERP,
+          marketIndex: this.perpMarketIndex,
+          direction: PositionDirection.SHORT,
+          baseAssetAmount: this.toPreciseSize(this.gridPositionSize),
+          price: this.toPrecisePrice(level.price),
+          postOnly: true,
+          reduceOnly: true,
+        });
+        level.status = 'tp_open';
+        tpCount++;
+      }
     }
 
-    const abovePrices = this.gridPrices.filter(p => p > this.currentPrice);
-    for (const p of abovePrices) {
-      const size = this.calculatePositionSize(p);
-      console.log(`size: ${size} | p: ${p}`);
-
-      const orderParams = {
-        orderType: OrderType.LIMIT,
-        marketType: MarketType.PERP,
-        marketIndex: this.perpMarketIndex,
-        direction: PositionDirection.SHORT,
-        baseAssetAmount: this.driftClient.convertToPerpPrecision(size),
-        price: this.driftClient.convertToPricePrecision(p),
-        reduceOnly: false,
-      };
-      orderParamsList.push(orderParams);
-
-      console.log(`amount: ${orderParams.baseAssetAmount} | price: ${orderParams.price}`);
+    // ✅ 3. Place buy grid below P0 (no take profits yet)
+    for (let i = 0; i < this.gridLevels.length; i++) {
+      const level = this.gridLevels[i];
+      if (level.price < this.config.P0) {
+        orders.push({
+          orderType: OrderType.LIMIT,
+          marketType: MarketType.PERP,
+          marketIndex: this.perpMarketIndex,
+          direction: PositionDirection.LONG,
+          baseAssetAmount: this.toPreciseSize(this.gridPositionSize),
+          price: this.toPrecisePrice(level.price),
+          postOnly: true,
+          reduceOnly: false,
+        });
+        level.status = 'long_open';
+      }
     }
 
-    console.log("placing orders...");
-    const txSig = await this.driftClient.placeOrders(orderParamsList);
-    console.log("done.\nAwaiting tx confirmation...");
+    console.log(`Placing ${orders.length} initial grid orders...`);
+    const txSig = await this.driftClient.placeOrders(orders);
+    console.log(`✅ Orders submitted: ${txSig}`);
     await confirmTransaction(this.driftClient, txSig);
-    console.log(`Tx confirmed: tx:${txSig}`);
-
-    return;
+    console.log(`✅ Initial grid setup on-chain`);
   }
 
-  private calculatePositionSize(p: number): number {
-    const { B, L, numLevels} = this.config;
-    const fixedUsd = (B * L) / (numLevels * 2);
-    console.log(`fixedUsd: ${fixedUsd} | p: ${p}`);
-    return fixedUsd / p;
+  private toPrecisePrice(price: number): BN {
+    return this.toPrecisePrice(
+      Math.round(price * 100) / 100 // ✅ round to 2 decimals to prevent precision issues
+    );
   }
 
-  public getStatus() {}
+  private toPreciseSize(size: number): BN {
+    return this.toPreciseSize(Math.max(size, 0.0001)); // ✅ avoid too small size rejection
+  }
+
+  public getStatus() {
+    return this.gridLevels.map((lvl, i) => ({
+      grid: i,
+      price: lvl.price,
+      status: lvl.status,
+      longOrderId: lvl.longOrderId,
+      tpOrderId: lvl.tpOrderId,
+    }));
+  }
 }
 
 
@@ -191,6 +345,7 @@ export async function initializeDualGridBot(
     spotMarketIndex,
     config,
   );
+
   await bot.placeInitialOrders();
   console.log('Dual Grid Bot initialized and launched.');
   console.log('Bot Status:', bot.getStatus());

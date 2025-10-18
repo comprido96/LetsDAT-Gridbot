@@ -7,10 +7,14 @@ import { confirmTransaction } from "./utils";
 
 
 const config: BotConfig = {
-  r: 0.997, // Grid ratio
-  B: 120, // Initial capital USD (1 BTC equivalent)
-  L: 4, // Leverage
-  numLevels: 10,
+  priceDown: 93_000,
+  priceUp: 114_000,
+  P0: 107_000,
+  B: 0.004, // Initial capital USD (1 BTC equivalent)
+  L: 1, // Leverage
+  numGrids: 21,
+  // numDown: 4, // For ~50 total active
+  // numUp: 4,
 };
 
 const BTC = 2; // devnet
