@@ -7,9 +7,9 @@ import { confirmTransaction } from "./utils";
 
 
 const config: BotConfig = {
-  priceDown: 93_000,
-  priceUp: 114_000,
-  P0: 107_000,
+  priceDown: 94_000,
+  priceUp: 115_000,
+  P0: 108_000,
   B: 0.004, // Initial capital USD (1 BTC equivalent)
   L: 1, // Leverage
   numGrids: 21,

@@ -5,6 +5,7 @@ import {
   Order,
   OrderType,
   PositionDirection,
+  PostOnlyParams,
   QUOTE_PRECISION,
 } from "@drift-labs/sdk";
 import { OrderBookEvent } from "./events/types";
@@ -50,7 +51,12 @@ class DualGridBot {
     this.perpMarketIndex = perpMarketIndex;
     this.spotMarketIndex = spotMarketIndex;
     this.config = config;
+
     this.currentPrice = this.driftClient.getOracleDataForPerpMarket(this.perpMarketIndex).price.div(QUOTE_PRECISION).toNumber();
+    this.config.priceDown = this.config.priceDown + (this.currentPrice - this.config.P0);
+    this.config.priceUp = this.config.priceUp + (this.currentPrice - this.config.P0);
+    this.config.P0 = this.currentPrice;
+
     this.gridSpace = (this.config.priceUp - this.config.priceDown) / this.config.numGrids;
     this.gridPositionSize = this.config.B * this.config.L / this.config.numGrids;
 
@@ -199,10 +205,10 @@ class DualGridBot {
       marketType: MarketType.PERP,
       marketIndex: this.perpMarketIndex,
       direction: PositionDirection.SHORT,
-      baseAssetAmount: this.toPreciseSize(this.gridPositionSize),
-      price: this.toPrecisePrice(nextLevel.price),
+      baseAssetAmount: this.driftClient.convertToPerpPrecision(this.gridPositionSize),
+      price: this.driftClient.convertToPricePrecision(nextLevel.price),
       reduceOnly: true,
-      postOnly: true,
+      postOnly: PostOnlyParams.MUST_POST_ONLY,
     };
 
     const tx = await placePerpOrderWithRetry({ driftClient: this.driftClient, orderParams });
@@ -221,10 +227,10 @@ class DualGridBot {
       marketType: MarketType.PERP,
       marketIndex: this.perpMarketIndex,
       direction: PositionDirection.LONG,
-      baseAssetAmount: this.toPreciseSize(this.gridPositionSize),
-      price: this.toPrecisePrice(level.price),
+      baseAssetAmount: this.driftClient.convertToPerpPrecision(this.gridPositionSize),
+      price: this.driftClient.convertToPricePrecision(level.price),
       reduceOnly: false,
-      postOnly: true,
+      postOnly: PostOnlyParams.MUST_POST_ONLY,
     };
 
     const tx = await placePerpOrderWithRetry({ driftClient: this.driftClient, orderParams });
@@ -235,7 +241,7 @@ class DualGridBot {
 
   private generateGridLevels(): GridLevel[] {
     const levels: GridLevel[] = [];
-    for (let i = 0; i < this.config.numGrids; i++) {
+    for (let i = 0; i <= this.config.numGrids; i++) {
       const price = this.config.priceDown + i * this.gridSpace;
       levels.push({
         price,
@@ -251,30 +257,30 @@ class DualGridBot {
     // ✅ Track orders to send in a single tx
     const orders: any[] = [];
 
-    // ✅ 1. Place initial market long (2 BTC)
+    // ✅ 1. Place initial market long
     const initialLongSize = this.downLevels * this.gridPositionSize;
     orders.push({
       orderType: OrderType.MARKET,
       marketType: MarketType.PERP,
       marketIndex: this.perpMarketIndex,
       direction: PositionDirection.LONG,
-      baseAssetAmount: this.toPreciseSize(initialLongSize),
+      baseAssetAmount: this.driftClient.convertToPerpPrecision(initialLongSize),
       reduceOnly: false,
     });
 
-    // ✅ 2. Take profit sells for initial long (10 levels above P0)
+    // ✅ 2. Take profit sells for initial long
     let tpCount = 0;
     for (let i = 0; i < this.gridLevels.length; i++) {
       const level = this.gridLevels[i];
-      if (level.price > this.config.P0 && tpCount < this.upLevels) {
+      if (level.price > this.config.P0 && tpCount <= this.upLevels) {
         orders.push({
           orderType: OrderType.LIMIT,
           marketType: MarketType.PERP,
           marketIndex: this.perpMarketIndex,
           direction: PositionDirection.SHORT,
-          baseAssetAmount: this.toPreciseSize(this.gridPositionSize),
-          price: this.toPrecisePrice(level.price),
-          postOnly: true,
+          baseAssetAmount: this.driftClient.convertToPerpPrecision(this.gridPositionSize),
+          price: this.driftClient.convertToPricePrecision(level.price),
+          postOnly: PostOnlyParams.MUST_POST_ONLY,
           reduceOnly: true,
         });
         level.status = 'tp_open';
@@ -282,7 +288,7 @@ class DualGridBot {
       }
     }
 
-    // ✅ 3. Place buy grid below P0 (no take profits yet)
+    // ✅ 3. Place buy grid below P0
     for (let i = 0; i < this.gridLevels.length; i++) {
       const level = this.gridLevels[i];
       if (level.price < this.config.P0) {
@@ -291,9 +297,9 @@ class DualGridBot {
           marketType: MarketType.PERP,
           marketIndex: this.perpMarketIndex,
           direction: PositionDirection.LONG,
-          baseAssetAmount: this.toPreciseSize(this.gridPositionSize),
-          price: this.toPrecisePrice(level.price),
-          postOnly: true,
+          baseAssetAmount: this.driftClient.convertToPerpPrecision(this.gridPositionSize),
+          price: this.driftClient.convertToPricePrecision(level.price),
+          postOnly: PostOnlyParams.MUST_POST_ONLY,
           reduceOnly: false,
         });
         level.status = 'long_open';
@@ -305,16 +311,6 @@ class DualGridBot {
     console.log(`✅ Orders submitted: ${txSig}`);
     await confirmTransaction(this.driftClient, txSig);
     console.log(`✅ Initial grid setup on-chain`);
-  }
-
-  private toPrecisePrice(price: number): BN {
-    return this.toPrecisePrice(
-      Math.round(price * 100) / 100 // ✅ round to 2 decimals to prevent precision issues
-    );
-  }
-
-  private toPreciseSize(size: number): BN {
-    return this.toPreciseSize(Math.max(size, 0.0001)); // ✅ avoid too small size rejection
   }
 
   public getStatus() {
