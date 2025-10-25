@@ -35,33 +35,41 @@ The bot automatically places grid-aligned long and take-profit orders based on t
 
 1. Clone the repository:
 
+   ```code
    git [clone https://github.com/yourname/drift-gridbot.git](https://github.com/comprido96/LetsDAT-Gridbot)
    cd LetsDAT-Gridbot
+   ```
 
 2. Install dependencies:
 
+   ```code
    yarn install
    # or
    npm install
+   ```
 
 4. Configure your environment:
 
+   ```code
    export ENDPOINT=your-rpc-url
-
    export ENV=devnet|mainnet-beta
-
    export ANCHOR_WALLET=path-to-your-wallet-json-keypair
+   ```
 
 5. Build the project:
 
+   ```code
    yarn build
+   ```
 
 ## Usage
 
 1. Launch the bot:
 
+   ```code
    npx esrun src/gridBot/deploy.ts --capital <btc-amount> --lower <lower-bound-price> --upper <upper-bound-price> --startPrice <center-price> /
      --levels <number-of-grid-levels> --leverage <trading-leverage>
+   ```
 
 3. Expected initial actions:
 
@@ -81,7 +89,9 @@ The bot automatically places grid-aligned long and take-profit orders based on t
 
 7. Stop the bot:
 
+   ```code
    Ctrl + C
+   ```
 
 ## Disclaimer
 
