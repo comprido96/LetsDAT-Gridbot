@@ -40,13 +40,14 @@ The bot automatically places grid-aligned long and take-profit orders based on t
    npm install
 
 3. Configure your environment:
-   export ENDPOINT=<your-rpc-url>
 
-   export ENV=<devnet|mainnet-beta>
+   export ENDPOINT=your-rpc-url
 
-   export ANCHOR_WALLET=<path-to-your-wallet-json-keypair>
+   export ENV=devnet|mainnet-beta
 
-4. Build the project:
+   export ANCHOR_WALLET=path-to-your-wallet-json-keypair
+
+5. Build the project:
    yarn build
 
 ## Usage
