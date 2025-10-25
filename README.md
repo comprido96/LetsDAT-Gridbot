@@ -41,7 +41,9 @@ The bot automatically places grid-aligned long and take-profit orders based on t
 
 3. Configure your environment:
    export ENDPOINT=<your-rpc-url>
+
    export ENV=<devnet|mainnet-beta>
+
    export ANCHOR_WALLET=<path-to-your-wallet-json-keypair>
 
 4. Build the project:
@@ -55,15 +57,18 @@ The bot automatically places grid-aligned long and take-profit orders based on t
 
 3. Expected initial actions:
    • Open X BTC long at P0 (market)
+
    • Place Y take-profit limit sells above P0
+
    • Place 2Y buy limit longs below P0
+
    For example, X=0.004, Y=7 (take-profit limits are exactly half the buy limit longs)
 
-4. Runtime behavior:
+5. Runtime behavior:
    • When a long limit fills → place TP one grid above
    • When a TP fills → place replacement long one grid below
 
-5. Stop the bot:
+6. Stop the bot:
    Ctrl + C
 
 ## Disclaimer
