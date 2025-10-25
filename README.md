@@ -9,8 +9,11 @@ The bot automatically places grid-aligned long and take-profit orders based on t
 
 ✅ Dynamic grid setup with configurable range, leverage, and spacing  
 ✅ Automated reaction logic:
+   
    • Opens new longs as price dips  
+   
    • Takes profit and replaces longs as price rises  
+
 ✅ Supports Drift Protocol perpetual futures markets  
 ✅ Safe order placement using `postOnly` and size precision control  
 ✅ In-memory grid state tracking (orderId → grid level mapping)  
@@ -31,15 +34,17 @@ The bot automatically places grid-aligned long and take-profit orders based on t
 ## Setup
 
 1. Clone the repository:
+
    git [clone https://github.com/yourname/drift-gridbot.git](https://github.com/comprido96/LetsDAT-Gridbot)
    cd LetsDAT-Gridbot
 
 2. Install dependencies:
+
    yarn install
    # or
    npm install
 
-3. Configure your environment:
+4. Configure your environment:
 
    export ENDPOINT=your-rpc-url
 
@@ -48,15 +53,18 @@ The bot automatically places grid-aligned long and take-profit orders based on t
    export ANCHOR_WALLET=path-to-your-wallet-json-keypair
 
 5. Build the project:
+
    yarn build
 
 ## Usage
 
 1. Launch the bot:
+
    npx esrun src/gridBot/deploy.ts --capital <btc-amount> --lower <lower-bound-price> --upper <upper-bound-price> --startPrice <center-price> /
      --levels <number-of-grid-levels> --leverage <trading-leverage>
 
 3. Expected initial actions:
+
    • Open X BTC long at P0 (market)
 
    • Place Y take-profit limit sells above P0
@@ -66,10 +74,13 @@ The bot automatically places grid-aligned long and take-profit orders based on t
    For example, X=0.004, Y=7 (take-profit limits are exactly half the buy limit longs)
 
 5. Runtime behavior:
+
    • When a long limit fills → place TP one grid above
+
    • When a TP fills → place replacement long one grid below
 
-6. Stop the bot:
+7. Stop the bot:
+
    Ctrl + C
 
 ## Disclaimer
