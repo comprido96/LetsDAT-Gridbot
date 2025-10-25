@@ -36,7 +36,7 @@ The bot automatically places grid-aligned long and take-profit orders based on t
 1. Clone the repository:
 
    ```code
-   git [clone https://github.com/yourname/drift-gridbot.git](https://github.com/comprido96/LetsDAT-Gridbot)
+   git clone https://github.com/comprido96/LetsDAT-Gridbot
    cd LetsDAT-Gridbot
    ```
 
