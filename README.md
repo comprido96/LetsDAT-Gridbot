@@ -1,6 +1,6 @@
-# Dual Grid Bot for Drift Protocol (BTC-PERP)
+# Trading Grid Bot for Drift Protocol (BTC-PERP)
 
-A fully automated dual-grid trading bot built for the Drift Protocol perpetual futures market (BTC-PERP).  
+A fully automated grid trading bot built for the Drift Protocol perpetual futures market (BTC-PERP).  
 This bot implements a long-biased grid trading strategy designed to profit from volatility within a defined price range while maintaining continuous market exposure.
 
 The bot automatically places grid-aligned long and take-profit orders based on the live oracle price, reacts to fills by rebalancing the grid, and operates safely using post-only orders.
